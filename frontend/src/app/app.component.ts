@@ -25,7 +25,7 @@ import { environment } from '../environments/environment';
             🛡️ Israel Geopolitical & Security Threat Dashboard
           </h1>
           <p class="text-sm text-slate-400">
-            Multimodal (text + image) analysis via Llama 4 Scout · live polling every
+            AI threat analysis via Llama 3.3 70B (OpenRouter) · live polling every
             {{ pollSeconds }}s
           </p>
         </div>

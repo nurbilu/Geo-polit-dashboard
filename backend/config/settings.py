@@ -160,11 +160,9 @@ CELERY_BEAT_SCHEDULE = {
     },
 }
 
-# --- Ollama / Llama 4 Scout --------------------------------------------
-OLLAMA_HOST = env("OLLAMA_HOST", "http://ollama:11434")
-OLLAMA_MODEL = env("OLLAMA_MODEL", "llama4:scout")
-OLLAMA_KEEP_ALIVE = env("OLLAMA_KEEP_ALIVE", "5m")
-OLLAMA_TIMEOUT = int(env("OLLAMA_TIMEOUT", "300"))
+# --- OpenRouter (AI analysis) ------------------------------------------
+OPENROUTER_API_KEY = env("OPENROUTER_API_KEY", "")
+OPENROUTER_MODEL = env("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct")
 
 # --- App-specific -------------------------------------------------------
 CATCHUP_WINDOW_HOURS = int(env("CATCHUP_WINDOW_HOURS", "24"))

@@ -1,19 +1,25 @@
 """
-Llama 4 Scout multimodal analysis via Ollama.
+Multimodal threat analysis via OpenRouter's chat-completions API.
 
-Sends BOTH text and (optionally) a base64-encoded image to the model and
-coerces the response into a strict JSON verdict used by the dashboard.
+Uses the hosted vision model ``meta-llama/llama-3.2-11b-vision-instruct``
+(configurable via ``settings.OPENROUTER_MODEL``) and the standard ``requests``
+library. Text and (optionally) an image are sent together using OpenRouter's
+Vision API content structure; the model output is coerced into a strict JSON
+``ThreatVerdict`` consumed by the dashboard.
 """
 import base64
 import json
 import logging
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Optional
 
+import requests
 from django.conf import settings
-from ollama import Client
 
 logger = logging.getLogger(__name__)
+
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+REQUEST_TIMEOUT = 120  # seconds
 
 VALID_REGIONS = {
     "judea_samaria", "golan_heights", "north", "south", "central", "unknown",
@@ -114,48 +120,91 @@ def _extract_json(text: str) -> dict:
     return {}
 
 
-def _client() -> Client:
-    return Client(host=settings.OLLAMA_HOST, timeout=settings.OLLAMA_TIMEOUT)
+def _headers() -> dict:
+    """
+    OpenRouter request headers. HTTP-Referer and X-Title are required by
+    OpenRouter for app ranking / usage attribution on the dashboard.
+    """
+    return {
+        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "http://localhost:8000",
+        "X-Title": "Geopolitical Threat Dashboard",
+    }
 
 
-def encode_image_bytes(data: bytes) -> str:
-    """Base64-encode raw image bytes for the Ollama images payload."""
-    return base64.b64encode(data).decode("utf-8")
+def _detect_mime(data: bytes) -> str:
+    """Sniff a few common image magic bytes; default to JPEG."""
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:3] == b"GIF":
+        return "image/gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/jpeg"
 
 
-def analyze(
+def _data_url(image_bytes: bytes) -> str:
+    """Build a base64 data URL for the OpenRouter Vision ``image_url`` field."""
+    mime = _detect_mime(image_bytes)
+    b64 = base64.b64encode(image_bytes).decode("utf-8")
+    return f"data:{mime};base64,{b64}"
+
+
+def _analyze_request(
     text: str,
     image_bytes: Optional[bytes] = None,
     title: str = "",
-) -> ThreatVerdict:
-    """
-    Run multimodal analysis. `image_bytes` is optional; when present it is sent
-    alongside the text so Llama 4 Scout can reason over visual cues too.
-    """
-    client = _client()
+) -> tuple[ThreatVerdict, int, dict]:
+    """Shared implementation for analyze() and analyze_with_diagnostics()."""
+    if not settings.OPENROUTER_API_KEY:
+        raise RuntimeError("OPENROUTER_API_KEY is not configured.")
 
-    user_content = (
+    prompt_text = (
         f"TITLE: {title}\n\nTEXT:\n{text or '(no text provided)'}\n\n"
         "Return the JSON verdict now."
     )
-    message = {"role": "user", "content": user_content}
 
+    # Multimodal messages use a content array of typed parts; text-only items
+    # may use a plain string. We always use the array form for consistency.
+    user_parts = [{"type": "text", "text": prompt_text}]
     if image_bytes:
-        # Ollama expects base64 strings (or raw bytes) in `images`.
-        message["images"] = [encode_image_bytes(image_bytes)]
+        user_parts.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": _data_url(image_bytes)},
+            }
+        )
 
-    response = client.chat(
-        model=settings.OLLAMA_MODEL,
-        messages=[
+    payload = {
+        "model": settings.OPENROUTER_MODEL,
+        "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
-            message,
+            {"role": "user", "content": user_parts},
         ],
-        format="json",  # Ask Ollama to constrain output to JSON.
-        keep_alive=settings.OLLAMA_KEEP_ALIVE,
-        options={"temperature": 0.1},
+        "temperature": 0.1,
+        # Enforce strict JSON-only output.
+        "response_format": {"type": "json_object"},
+    }
+
+    response = requests.post(
+        OPENROUTER_URL,
+        headers=_headers(),
+        data=json.dumps(payload),
+        timeout=REQUEST_TIMEOUT,
     )
 
-    content = response.get("message", {}).get("content", "")
+    body = {}
+    try:
+        body = response.json()
+    except json.JSONDecodeError:
+        body = {"_raw_text": response.text[:4000]}
+
+    response.raise_for_status()
+
+    content = (
+        body.get("choices", [{}])[0].get("message", {}).get("content", "")
+    )
     parsed = _extract_json(content)
 
     verdict = ThreatVerdict(
@@ -166,21 +215,47 @@ def analyze(
         raw=parsed or {"_unparsed": content[:2000]},
     )
     logger.info(
-        "Llama4 verdict: threat=%s region=%s severity=%s",
+        "OpenRouter verdict (%s): threat=%s region=%s severity=%s",
+        settings.OPENROUTER_MODEL,
         verdict.is_threat, verdict.region, verdict.threat_severity,
     )
+    return verdict, response.status_code, body
+
+
+def analyze(
+    text: str,
+    image_bytes: Optional[bytes] = None,
+    title: str = "",
+) -> ThreatVerdict:
+    """
+    Run multimodal analysis via OpenRouter. When ``image_bytes`` is provided it
+    is base64-encoded and sent alongside the text using the Vision API content
+    structure so the model can reason over visual cues.
+    """
+    verdict, _, _ = _analyze_request(text, image_bytes=image_bytes, title=title)
     return verdict
 
 
+def analyze_with_diagnostics(
+    text: str,
+    image_bytes: Optional[bytes] = None,
+    title: str = "",
+) -> tuple[ThreatVerdict, int, dict]:
+    """
+    Like ``analyze`` but also returns the HTTP status code and the raw OpenRouter
+    JSON body (for diagnostics / management-command telemetry).
+    """
+    return _analyze_request(text, image_bytes=image_bytes, title=title)
+
+
 def ensure_model_available() -> bool:
-    """Check the configured model is pulled; used by health/diagnostics."""
-    try:
-        models = _client().list().get("models", [])
-        names = {m.get("model") or m.get("name") for m in models}
-        return settings.OLLAMA_MODEL in names
-    except Exception:
-        logger.exception("Ollama not reachable for model check.")
-        return False
+    """Health/diagnostics: analysis is possible only if a key is configured."""
+    return bool(settings.OPENROUTER_API_KEY)
 
 
-__all__ = ["analyze", "ThreatVerdict", "encode_image_bytes", "ensure_model_available"]
+__all__ = [
+    "analyze",
+    "analyze_with_diagnostics",
+    "ThreatVerdict",
+    "ensure_model_available",
+]

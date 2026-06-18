@@ -77,7 +77,7 @@ class Alert(models.Model):
     # Raw, unstructured payload from the source for auditing/reprocessing.
     raw_data = models.JSONField(default=dict, blank=True)
 
-    # --- Llama 4 Scout analysis output ---
+    # --- AI (OpenRouter Vision) analysis output ---
     status = models.CharField(
         max_length=20, choices=AlertStatus.choices, default=AlertStatus.PENDING
     )

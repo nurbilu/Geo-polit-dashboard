@@ -3,7 +3,7 @@ Celery tasks:
   - startup_catchup: fires once on worker boot to backfill the downtime window.
   - poll_all_sources / poll_source: incremental ingestion from each source.
   - download_media: fetch + persist scraped images locally.
-  - analyze_alert: multimodal Llama 4 Scout pipeline (text + image -> JSON verdict).
+  - analyze_alert: multimodal OpenRouter Vision pipeline (text + image -> JSON verdict).
   - rebuild_metrics: roll up dashboard counters.
 
 Source connectors (Telegram/X/RSS/Gov) are intentionally pluggable. RSS is wired
@@ -262,7 +262,7 @@ def download_media(self, alert_id):
 # ---------------------------------------------------------------------------
 @shared_task(bind=True, max_retries=2, default_retry_delay=60)
 def analyze_alert(self, alert_id):
-    """Run Llama 4 Scout over the alert's text (+ image) and store the verdict."""
+    """Run the OpenRouter model over the alert's text and store the verdict."""
     try:
         alert = Alert.objects.select_related("source").get(id=alert_id)
     except Alert.DoesNotExist:

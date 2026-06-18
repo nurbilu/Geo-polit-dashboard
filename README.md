@@ -2,11 +2,13 @@
 
 A resource-efficient, **start-and-stop** friendly dashboard that ingests signals
 about threats to Israel — including **Judea & Samaria** and the **Golan Heights** —
-and runs **multimodal AI analysis (text + images)** using **Llama 4 Scout** locally
-via Ollama.
+and runs **multimodal AI analysis (text + images)** in the cloud via
+**OpenRouter**, using the lightweight **`meta-llama/llama-3.2-11b-vision-instruct`**
+vision model.
 
 > Standard WSGI (no WebSockets/ASGI), Celery + Redis for async work, MySQL 8 for
-> storage, and Angular with HTTP polling for a light live feed.
+> storage, and Angular with HTTP polling for a light live feed. No local GPU or
+> heavy model weights required — inference is fully offloaded to OpenRouter.
 
 ---
 
@@ -19,18 +21,22 @@ via Ollama.
 | `web`            | Django + DRF + Gunicorn (WSGI)         | REST API + Django Admin |
 | `celery_worker`  | Celery                                 | Polling, media download, **multimodal analysis**, startup catch-up |
 | `celery_beat`    | Celery beat                            | Periodic source polling |
-| `ollama`         | Ollama + `llama4:scout`                | Local multimodal LLM inference |
 | `frontend`       | Angular (+ Tailwind) on nginx          | Live dashboard, polls every 20s |
 
+AI inference runs on **OpenRouter** (`https://openrouter.ai/api/v1`) — there is
+no local model service to run or maintain.
+
 ```
-[Sources] -> Celery poll -> Alert (PENDING) -> [download image] -> Llama 4 Scout
-                                                       |                |
-                                                  base64 image     text prompt
-                                                       \               /
-                                                  JSON verdict (is_threat, region,
-                                                  threat_severity, visual_summary)
+[Sources] -> Celery poll -> Alert (PENDING) -> [download image]
                                                        |
-                                          Angular polls /api/alerts every 20s
+                                   text + base64 image (Vision API content array)
+                                                       |
+                                         OpenRouter  ──►  llama-3.2-11b-vision-instruct
+                                                       |
+                                  JSON verdict (is_threat, region,
+                                  threat_severity, visual_summary)
+                                                       |
+                                  Angular polls /api/alerts every 20s
 ```
 
 ---
@@ -39,8 +45,8 @@ via Ollama.
 
 ```
 .
-├── docker-compose.yml          # all services wired
-├── .env.example                # copy to .env
+├── docker-compose.yml          # db, redis, web, celery_worker, celery_beat, frontend
+├── .env.example                # copy to .env (holds OpenRouter credentials)
 ├── backend/
 │   ├── config/                 # Django project (settings, celery, wsgi, urls)
 │   ├── threats/
@@ -48,27 +54,57 @@ via Ollama.
 │   │   ├── admin.py            # manage sources + alerts (with image preview)
 │   │   ├── serializers.py / views.py / urls.py   # DRF API
 │   │   ├── tasks.py            # startup catch-up, polling, media download, analysis
-│   │   ├── llama4_service.py   # multimodal Ollama client + strict-JSON parsing
+│   │   ├── llama4_service.py   # OpenRouter Vision client + strict-JSON parsing
 │   │   └── management/commands/seed_sources.py
 │   ├── Dockerfile / entrypoint.sh / requirements.txt
-├── frontend/                   # Angular workspace
-│   └── src/app/
-│       ├── services/polling.service.ts      # RxJS timer polling (20s)
-│       ├── components/dashboard-grid/        # KPI tiles
-│       └── components/threat-feed/           # multimodal cards (images)
-└── ollama/
-    ├── entrypoint.sh           # boots server + pulls llama4:scout
-    └── Modelfile               # optional custom FP8 build
+└── frontend/                   # Angular workspace
+    └── src/app/
+        ├── services/polling.service.ts      # RxJS timer polling (20s)
+        ├── components/dashboard-grid/        # KPI tiles
+        └── components/threat-feed/           # multimodal cards (images)
 ```
+
+---
+
+## Cloud AI: OpenRouter
+
+All analysis is performed by a hosted model on OpenRouter, called with the
+standard `requests` library from `backend/threats/llama4_service.py`.
+
+- **Endpoint:** `https://openrouter.ai/api/v1/chat/completions`
+- **Model:** `meta-llama/llama-3.2-11b-vision-instruct` (configurable)
+- **Required headers** (sent on every request):
+  - `Authorization: Bearer <OPENROUTER_API_KEY>`
+  - `Content-Type: application/json`
+  - `HTTP-Referer: http://localhost:8000` — OpenRouter app ranking / attribution
+  - `X-Title: Geopolitical Threat Dashboard` — usage tracking under this app name
+- **Strict JSON:** the payload sets `response_format: {"type": "json_object"}`
+  and the output is defensively parsed by `_extract_json`.
+
+### Required `.env` keys
+
+Get an API key from <https://openrouter.ai/keys> and fund your account with
+credits, then set:
+
+```bash
+OPENROUTER_API_KEY=sk-or-v1-...                       # your real key
+OPENROUTER_MODEL=meta-llama/llama-3.2-11b-vision-instruct
+```
+
+These are injected into the `web` and `celery_worker` containers via
+`docker-compose.yml`. Swapping `OPENROUTER_MODEL` to any other OpenRouter model
+slug is all that's needed to change models (use a vision-capable slug to keep
+image analysis working).
 
 ---
 
 ## Quick start
 
-1. **Copy the environment file** and adjust secrets:
+1. **Copy the environment file** and add your OpenRouter key:
 
    ```bash
    cp .env.example .env
+   # edit .env -> set OPENROUTER_API_KEY (and DJANGO_SECRET_KEY, DB passwords)
    ```
 
 2. **Build and start** the stack:
@@ -77,9 +113,9 @@ via Ollama.
    docker compose up --build
    ```
 
-   On first boot, the `ollama` container pulls `llama4:scout` (large download).
    The `web` container runs migrations, collects static files, and creates the
-   admin superuser from the `.env` credentials.
+   admin superuser from the `.env` credentials. No model download step — the
+   worker calls OpenRouter directly.
 
 3. **Open the apps:**
    - Dashboard: <http://localhost:4200>
@@ -100,9 +136,21 @@ When a new `Alert` is ingested:
 
 1. If it has an `image_url`, `download_media` fetches and stores it locally
    (`image_path`).
-2. `analyze_alert` reads the image bytes, base64-encodes them, and sends **both
-   the text and the image** to Llama 4 Scout via the `ollama` Python client.
-3. The model is constrained (`format="json"`) to return:
+2. `analyze_alert` reads the image bytes and calls `llama4_service.analyze()`,
+   which base64-encodes the image into a `data:` URL and sends **both the text
+   and the image** to OpenRouter using the Vision API content structure:
+
+   ```json
+   {
+     "role": "user",
+     "content": [
+       { "type": "text", "text": "Return the JSON verdict now." },
+       { "type": "image_url", "image_url": { "url": "data:image/jpeg;base64,<...>" } }
+     ]
+   }
+   ```
+
+3. The model returns a strict JSON object:
 
    ```json
    {
@@ -114,7 +162,8 @@ When a new `Alert` is ingested:
    ```
 
 4. The verdict is normalized (region aliases, severity clamped to 1–10) and saved
-   to the `Alert`, then surfaced in the live feed.
+   to the `Alert`, then surfaced in the live feed. Text-only items (no image)
+   send just the text part and still return the same JSON shape.
 
 ---
 
@@ -158,29 +207,17 @@ Key `.env` values (see `.env.example` for all):
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `OLLAMA_MODEL` | `llama4:scout` | Model tag pulled/built by the ollama service |
-| `OLLAMA_TIMEOUT` | `300` | Seconds for inference requests |
+| `OPENROUTER_API_KEY` | _(empty)_ | **Required.** Your OpenRouter API key |
+| `OPENROUTER_MODEL` | `meta-llama/llama-3.2-11b-vision-instruct` | Any OpenRouter model slug (use a vision slug for image analysis) |
 | `CATCHUP_WINDOW_HOURS` | `24` | Backfill window on startup |
 | `SOURCE_POLL_INTERVAL` | `120` | Periodic poll cadence (seconds) |
 | `CELERY_CONCURRENCY` | `2` | Worker concurrency (memory vs throughput) |
 
-### FP8 / custom model
+### Switching models
 
-To run a specific FP8 quantization, edit `ollama/Modelfile` to add a `FROM`
-directive (a tag or local GGUF path), then rebuild:
-
-```bash
-docker compose up -d --build ollama
-```
-
-The ollama entrypoint detects a real `FROM` line and runs `ollama create`
-instead of a plain pull.
-
-### GPU
-
-The `ollama` service has a commented-out NVIDIA `deploy.resources` block in
-`docker-compose.yml`. Uncomment it (with the NVIDIA Container Toolkit installed)
-for GPU acceleration. Llama 4 Scout is large — GPU or ample RAM is recommended.
+Set `OPENROUTER_MODEL` to any slug from <https://openrouter.ai/models>. To keep
+the multimodal (image) pipeline functional, choose a **vision-capable** model.
+Text-only models will still work for text but ignore the image part.
 
 ---
 
@@ -191,6 +228,7 @@ for GPU acceleration. Llama 4 Scout is large — GPU or ample RAM is recommended
 cd backend
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+export OPENROUTER_API_KEY=sk-or-v1-...               # Windows: setx OPENROUTER_API_KEY ...
 python manage.py migrate
 python manage.py runserver
 
@@ -200,5 +238,6 @@ npm install
 npm start            # ng serve on http://localhost:4200 -> talks to :8000
 ```
 
-You will still need Redis, MySQL, and Ollama reachable at the hosts configured in
-your environment.
+You will still need Redis and MySQL reachable at the hosts configured in your
+environment. AI inference needs only outbound HTTPS access to OpenRouter — no
+local model server.

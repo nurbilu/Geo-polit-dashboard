@@ -39,32 +39,9 @@ services:
       timeout: 5s
       retries: 10
 
-  ollama:
-    image: ollama/ollama:latest
-    container_name: threat_ollama
-    restart: unless-stopped
-    environment:
-      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-5m}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama4:scout}
-    volumes:
-      - ollama_data:/root/.ollama
-      - ./ollama/entrypoint.sh:/entrypoint.sh:ro
-      - ./ollama/Modelfile:/Modelfile:ro
-    entrypoint: ["/bin/sh", "/entrypoint.sh"]
-    healthcheck:
-      test: ["CMD-SHELL", "ollama list || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 20
-      start_period: 120s
-    # GPU acceleration (NVIDIA). Comment out if running CPU-only.
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
+  # NOTE: The local `ollama` service has been removed. AI analysis now runs
+  # against OpenRouter's hosted API (see backend/threats/llama4_service.py),
+  # freeing up local CPU/RAM. Credentials are supplied via OPENROUTER_* in .env.
 
   web:
     build:
@@ -76,6 +53,8 @@ services:
       - .env
     environment:
       DJANGO_SETTINGS_MODULE: config.settings
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-meta-llama/llama-3.3-70b-instruct}
     volumes:
       - ./backend:/app
       - media_data:/app/media
@@ -97,6 +76,8 @@ services:
       - .env
     environment:
       DJANGO_SETTINGS_MODULE: config.settings
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-meta-llama/llama-3.3-70b-instruct}
     volumes:
       - ./backend:/app
       - media_data:/app/media
@@ -140,5 +121,4 @@ services:
 volumes:
   mysql_data:
   redis_data:
-  ollama_data:
   media_data:
