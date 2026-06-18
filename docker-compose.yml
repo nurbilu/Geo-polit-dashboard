@@ -1,0 +1,144 @@
+services:
+  db:
+    image: mysql:8.0
+    container_name: threat_db
+    restart: unless-stopped
+    command: --default-authentication-plugin=mysql_native_password
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-threats}
+      MYSQL_USER: ${MYSQL_USER:-threats}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-threats_pass}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_pass}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${MYSQL_ROOT_PASSWORD:-root_pass}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    # No host port exposure by default to keep the surface minimal; uncomment to debug.
+    # ports:
+    #   - "3306:3306"
+
+  redis:
+    image: redis:7-alpine
+    container_name: threat_redis
+    restart: unless-stopped
+    # Lightweight, persistence-light config tuned for a start/stop lifecycle.
+    command: >
+      redis-server
+      --save 60 1
+      --maxmemory 256mb
+      --maxmemory-policy noeviction
+      --appendonly no
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: threat_ollama
+    restart: unless-stopped
+    environment:
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-5m}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama4:scout}
+    volumes:
+      - ollama_data:/root/.ollama
+      - ./ollama/entrypoint.sh:/entrypoint.sh:ro
+      - ./ollama/Modelfile:/Modelfile:ro
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+    # GPU acceleration (NVIDIA). Comment out if running CPU-only.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  web:
+    build:
+      context: ./backend
+    container_name: threat_web
+    restart: unless-stopped
+    command: ["web"]
+    env_file:
+      - .env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings
+    volumes:
+      - ./backend:/app
+      - media_data:/app/media
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery_worker:
+    build:
+      context: ./backend
+    container_name: threat_celery
+    restart: unless-stopped
+    command: ["worker"]
+    env_file:
+      - .env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings
+    volumes:
+      - ./backend:/app
+      - media_data:/app/media
+    depends_on:
+      web:
+        condition: service_started
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+
+  celery_beat:
+    build:
+      context: ./backend
+    container_name: threat_beat
+    restart: unless-stopped
+    command: ["beat"]
+    env_file:
+      - .env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings
+    volumes:
+      - ./backend:/app
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: threat_frontend
+    restart: unless-stopped
+    ports:
+      - "4200:80"
+    depends_on:
+      web:
+        condition: service_started
+
+volumes:
+  mysql_data:
+  redis_data:
+  ollama_data:
+  media_data:

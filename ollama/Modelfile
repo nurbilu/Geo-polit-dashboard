@@ -1,0 +1,15 @@
+# Optional custom Modelfile for the FP8 build of Llama 4 Scout.
+#
+# By default this file is empty-ish and the entrypoint will simply `ollama pull`
+# the OLLAMA_MODEL tag. To use a specific FP8 quantization, uncomment and point
+# FROM at the desired tag or a local GGUF path, then rebuild the ollama service.
+#
+# FROM llama4:scout-fp8
+#
+# PARAMETER temperature 0.1
+# PARAMETER num_ctx 8192
+#
+# SYSTEM """
+# You are a geopolitical security analyst monitoring threats to Israel,
+# including Judea & Samaria and the Golan Heights. Always answer with strict JSON.
+# """

@@ -1,0 +1,23 @@
+# Env / secrets
+.env
+.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+backend/media/
+backend/staticfiles/
+
+# Node / Angular
+node_modules/
+frontend/dist/
+frontend/.angular/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
