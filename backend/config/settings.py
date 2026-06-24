@@ -7,10 +7,21 @@ Tuned for a low-memory, start/stop lifecycle:
 - Celery + Redis for async multimodal analysis.
 """
 import os
+import sys
 from datetime import timedelta
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+if sys.platform.startswith("win"):
+    # Allow Django's MySQL backend to run on Windows without compiling mysqlclient.
+    import pymysql
+
+    pymysql.install_as_MySQLdb()
+
 BASE_DIR = Path(__file__).resolve().parent.parent
+# Load root-level .env for local (non-Docker) Windows runs.
+load_dotenv(BASE_DIR.parent / ".env")
 
 
 def env(key, default=None):
@@ -82,13 +93,19 @@ TEMPLATES = [
 WSGI_APPLICATION = "config.wsgi.application"
 
 # --- Database (MySQL 8) -------------------------------------------------
+default_mysql_host = "127.0.0.1" if sys.platform.startswith("win") else "db"
+mysql_host = env("MYSQL_HOST", default_mysql_host)
+# In Docker, `db` is valid; in local Windows shells it is not resolvable.
+if sys.platform.startswith("win") and mysql_host == "db":
+    mysql_host = "127.0.0.1"
+
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.mysql",
         "NAME": env("MYSQL_DATABASE", "threats"),
         "USER": env("MYSQL_USER", "threats"),
         "PASSWORD": env("MYSQL_PASSWORD", "threats_pass"),
-        "HOST": env("MYSQL_HOST", "db"),
+        "HOST": mysql_host,
         "PORT": env("MYSQL_PORT", "3306"),
         "OPTIONS": {
             "charset": "utf8mb4",

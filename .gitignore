@@ -21,3 +21,11 @@ frontend/.angular/
 Thumbs.db
 .idea/
 .vscode/
+
+# logs and celerybeat
+logs/
+celerybeat-schedule*
+celerybeat-schedule
+celerybeat-schedule.*
+celerybeat.*
+celerybeat-schedule.*
