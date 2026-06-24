@@ -92,6 +92,10 @@ class Alert(models.Model):
         blank=True, default="",
         help_text="What the model spotted in the image, if any.",
     )
+    summary_hebrew = models.TextField(
+        blank=True, default="",
+        help_text="Concise Hebrew translation/summary produced by Llama 4 Scout.",
+    )
     analysis = models.JSONField(
         default=dict, blank=True, help_text="Full structured model response."
     )

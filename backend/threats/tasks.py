@@ -12,6 +12,7 @@ credentials/clients without touching the orchestration logic.
 """
 import logging
 import mimetypes
+import re
 from datetime import datetime, timedelta
 from datetime import timezone as dt_timezone
 
@@ -193,16 +194,106 @@ def _fetch_rss(source, since=None):
     return items
 
 
+TELEGRAM_PREVIEW_BASE = "https://t.me/s/"
+_TG_BG_RE = re.compile(r"background-image:\s*url\(['\"]?(.*?)['\"]?\)")
+
+
+def _telegram_channel_name(identifier: str) -> str:
+    """
+    Normalize a Source.identifier into a bare public channel name.
+
+    Accepts: '@channel', 'channel', 't.me/channel', 'https://t.me/s/channel', etc.
+    """
+    s = (identifier or "").strip()
+    for prefix in (
+        "https://t.me/s/", "http://t.me/s/", "https://t.me/", "http://t.me/",
+        "t.me/s/", "t.me/",
+    ):
+        if s.startswith(prefix):
+            s = s[len(prefix):]
+            break
+    s = s.lstrip("@").strip("/")
+    if s.startswith("s/"):
+        s = s[2:]
+    # Keep only the first path segment, drop query string.
+    return s.split("/")[0].split("?")[0].strip()
+
+
 def _fetch_telegram(source, since=None):
     """
-    Telegram channel connector.
+    Anonymous OSINT connector for public Telegram channels.
 
-    Plug in Telethon/Bot API here. Yield dicts with `image_url` set when a
-    message carries a photo so the media pipeline can download it. Use
-    `source.last_external_id` for de-duplication and `since` for catch-up.
+    Scrapes the public web preview at ``https://t.me/s/<channel>`` (no API keys,
+    no login) and extracts the latest text posts (and any attached photo URL).
+    De-duplication is handled upstream via the (source, external_id) constraint,
+    where ``external_id`` is the Telegram ``data-post`` value (e.g. "channel/123").
     """
-    logger.info("Telegram connector stub for %s (since=%s).", source.identifier, since)
-    return []
+    import httpx
+    from bs4 import BeautifulSoup
+
+    channel = _telegram_channel_name(source.identifier)
+    if not channel:
+        logger.warning("Telegram source %s has no parseable channel name.", source.id)
+        return []
+
+    url = f"{TELEGRAM_PREVIEW_BASE}{channel}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; ThreatDashboard/1.0; +osint)",
+        "Accept-Language": "en,he;q=0.9",
+    }
+    resp = httpx.get(
+        url, headers=headers, timeout=REQUEST_TIMEOUT, follow_redirects=True
+    )
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    items = []
+    for bubble in soup.select("div.tgme_widget_message"):
+        data_post = bubble.get("data-post")  # e.g. "channelname/1234"
+        if not data_post:
+            continue
+
+        text_el = bubble.select_one(".tgme_widget_message_text")
+        content = text_el.get_text("\n", strip=True) if text_el else ""
+
+        published = None
+        time_el = bubble.select_one("time[datetime]")
+        if time_el and time_el.get("datetime"):
+            published = parse_datetime(time_el["datetime"])
+        if since and published and published <= since:
+            continue
+
+        image_url = None
+        photo = bubble.select_one(".tgme_widget_message_photo_wrap")
+        if photo and photo.get("style"):
+            match = _TG_BG_RE.search(photo["style"])
+            if match:
+                image_url = match.group(1)
+
+        # Skip empty bubbles (e.g. service messages with neither text nor photo).
+        if not content and not image_url:
+            continue
+
+        title = (content.split("\n", 1)[0][:200] if content
+                 else f"Telegram post {data_post}")
+        items.append(
+            {
+                "external_id": data_post,
+                "title": title,
+                "content": content,
+                "url": f"https://t.me/{data_post}",
+                "image_url": image_url,
+                "published_at": published,
+                "raw": {
+                    "channel": channel,
+                    "data_post": data_post,
+                    "scraped_from": url,
+                },
+            }
+        )
+
+    logger.info("Telegram scrape %s: %s message(s).", channel, len(items))
+    return items
 
 
 def _fetch_x(source, since=None):
@@ -262,7 +353,8 @@ def download_media(self, alert_id):
 # ---------------------------------------------------------------------------
 @shared_task(bind=True, max_retries=2, default_retry_delay=60)
 def analyze_alert(self, alert_id):
-    """Run the OpenRouter model over the alert's text and store the verdict."""
+    """Run the configured AI provider (Llama 4 Scout via Groq by default) over
+    the alert's text (and image, if any) and store the structured verdict."""
     try:
         alert = Alert.objects.select_related("source").get(id=alert_id)
     except Alert.DoesNotExist:

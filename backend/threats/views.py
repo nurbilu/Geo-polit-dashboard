@@ -4,6 +4,7 @@ from django.db.models import Avg, Count, Q
 from django.utils import timezone
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -11,11 +12,21 @@ from .models import Alert, Metric, Source
 from .serializers import AlertSerializer, MetricSerializer, SourceSerializer
 
 
-class SourceViewSet(viewsets.ReadOnlyModelViewSet):
+class SourceViewSet(viewsets.ModelViewSet):
+    """
+    Full CRUD for monitored sources. Reads are public (the dashboard polls
+    them); create/update/delete require a valid JWT (the nurADMIN console).
+    """
+
     queryset = Source.objects.all()
     serializer_class = SourceSerializer
     filterset_fields = ["source_type", "is_active"]
     search_fields = ["name", "identifier"]
+
+    def get_permissions(self):
+        if self.action in ("list", "retrieve"):
+            return [permission() for permission in self.permission_classes]
+        return [IsAuthenticated()]
 
 
 class AlertViewSet(

@@ -57,13 +57,23 @@ class Command(BaseCommand):
 
         # --- Pre-flight ---------------------------------------------------
         self._section("Pre-flight")
+        provider = getattr(settings, "AI_PROVIDER", "groq")
+        if provider == "openrouter":
+            endpoint = llama4_service.OPENROUTER_URL
+            api_key = settings.OPENROUTER_API_KEY
+            key_var = "OPENROUTER_API_KEY"
+        else:
+            endpoint = settings.GROQ_BASE_URL + "/chat/completions"
+            api_key = settings.GROQ_API_KEY
+            key_var = "GROQ_API_KEY"
         if not llama4_service.ensure_model_available():
             raise CommandError(
-                "OPENROUTER_API_KEY is missing. Set it in .env and restart containers."
+                f"{key_var} is missing. Set it in .env and restart containers."
             )
-        self.stdout.write(f"  Model:     {settings.OPENROUTER_MODEL}")
-        self.stdout.write(f"  Endpoint:  {llama4_service.OPENROUTER_URL}")
-        key_hint = settings.OPENROUTER_API_KEY[:12] + "…" if settings.OPENROUTER_API_KEY else "(empty)"
+        self.stdout.write(f"  Provider:  {provider}")
+        self.stdout.write(f"  Model:     {llama4_service.active_model()}")
+        self.stdout.write(f"  Endpoint:  {endpoint}")
+        key_hint = api_key[:12] + "…" if api_key else "(empty)"
         self.stdout.write(f"  API key:   {key_hint}")
         self.stdout.write("")
 

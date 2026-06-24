@@ -25,6 +25,7 @@ export interface Alert {
   region_display: string;
   threat_severity: number | null;
   visual_summary: string;
+  summary_hebrew: string;
   analysis: Record<string, unknown>;
   published_at: string;
   analyzed_at: string | null;

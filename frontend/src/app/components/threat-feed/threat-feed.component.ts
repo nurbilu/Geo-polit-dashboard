@@ -44,9 +44,18 @@ import { Alert } from '../../models/alert.model';
             >
               {{ a.is_threat ? 'THREAT' : 'INFO' }}
             </span>
-            <span class="rounded bg-slate-800 px-2 py-0.5 text-xs text-sky-300">
-              {{ a.region_display }}
-            </span>
+            <div class="flex items-center gap-1.5">
+              <span
+                *ngIf="!a.image && a.threat_severity"
+                class="rounded px-1.5 py-0.5 text-xs font-bold text-white"
+                [ngClass]="severityClass(a.threat_severity)"
+              >
+                SEV {{ a.threat_severity }}
+              </span>
+              <span class="rounded bg-slate-800 px-2 py-0.5 text-xs text-sky-300">
+                {{ a.region_display }}
+              </span>
+            </div>
           </div>
 
           <h3 class="text-sm font-semibold leading-snug text-slate-100">
@@ -60,6 +69,15 @@ import { Alert } from '../../models/alert.model';
             class="rounded-md bg-slate-800/70 p-2 text-xs italic text-amber-200"
           >
             👁 {{ a.visual_summary }}
+          </p>
+
+          <p
+            *ngIf="a.summary_hebrew"
+            dir="rtl"
+            lang="he"
+            class="rounded-md bg-sky-950/50 p-2 text-right text-xs text-sky-200 ring-1 ring-sky-900/60"
+          >
+            {{ a.summary_hebrew }}
           </p>
 
           <div class="mt-auto flex items-center justify-between pt-2 text-[11px] text-slate-500">

@@ -148,6 +148,30 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.LimitOffsetPagination",
     "PAGE_SIZE": 50,
     "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
+    # JWT first, then session (for the browsable API / admin). Default
+    # permission stays open so the Angular polling feed keeps working; protect
+    # individual viewsets/actions with IsAuthenticated where needed.
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        "rest_framework.authentication.SessionAuthentication",
+    ],
+    "DEFAULT_PERMISSION_CLASSES": [
+        "rest_framework.permissions.AllowAny",
+    ],
+}
+
+# --- JWT (djangorestframework-simplejwt) -------------------------------
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(
+        minutes=int(env("JWT_ACCESS_MINUTES", "60"))
+    ),
+    "REFRESH_TOKEN_LIFETIME": timedelta(
+        days=int(env("JWT_REFRESH_DAYS", "7"))
+    ),
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": False,
+    "AUTH_HEADER_TYPES": ("Bearer",),
+    "SIGNING_KEY": SECRET_KEY,
 }
 
 # --- CORS (Angular dev/prod) -------------------------------------------
@@ -177,9 +201,18 @@ CELERY_BEAT_SCHEDULE = {
     },
 }
 
-# --- OpenRouter (AI analysis) ------------------------------------------
+# --- AI analysis provider ----------------------------------------------
+# "groq" (Llama 4 Scout via Groq Cloud) or "openrouter" (hosted vision model).
+AI_PROVIDER = env("AI_PROVIDER", "groq").strip().lower()
+
+# Groq Cloud (OpenAI-compatible API) running Llama 4 Scout.
+GROQ_API_KEY = env("GROQ_API_KEY", "")
+GROQ_MODEL = env("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+GROQ_BASE_URL = env("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
+
+# OpenRouter (legacy / fallback hosted vision model).
 OPENROUTER_API_KEY = env("OPENROUTER_API_KEY", "")
-OPENROUTER_MODEL = env("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct")
+OPENROUTER_MODEL = env("OPENROUTER_MODEL", "meta-llama/llama-3.2-11b-vision-instruct")
 
 # --- App-specific -------------------------------------------------------
 CATCHUP_WINDOW_HOURS = int(env("CATCHUP_WINDOW_HOURS", "24"))

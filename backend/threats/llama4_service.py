@@ -1,11 +1,13 @@
 """
-Multimodal threat analysis via OpenRouter's chat-completions API.
+Threat analysis via Llama 4 Scout.
 
-Uses the hosted vision model ``meta-llama/llama-3.2-11b-vision-instruct``
-(configurable via ``settings.OPENROUTER_MODEL``) and the standard ``requests``
-library. Text and (optionally) an image are sent together using OpenRouter's
-Vision API content structure; the model output is coerced into a strict JSON
-``ThreatVerdict`` consumed by the dashboard.
+Two interchangeable providers (selected by ``settings.AI_PROVIDER``):
+  - ``groq``       : Llama 4 Scout (``meta-llama/llama-4-scout-17b-16e-instruct``)
+                     on Groq Cloud, called through the OpenAI-compatible client.
+  - ``openrouter`` : legacy hosted vision model via raw ``requests``.
+
+Both coerce the model output into a strict JSON ``ThreatVerdict`` consumed by
+the dashboard, including a concise Hebrew summary (``summary_hebrew``).
 """
 import base64
 import json
@@ -54,10 +56,12 @@ SYSTEM_PROMPT = (
     '  "is_threat": boolean,            // true if it indicates a security threat\n'
     '  "region": string,               // one of: "Judea & Samaria", "Golan Heights", "North", "South", "Central"\n'
     '  "threat_severity": integer,      // 1 (negligible) to 10 (critical/imminent)\n'
-    '  "visual_summary": string         // short description of what is visible in the image, "" if no image\n'
+    '  "visual_summary": string,        // short description of what is visible in the image, "" if no image\n'
+    '  "summary_hebrew": string         // concise summary of the item IN HEBREW (עברית)\n'
     "}\n"
-    "If unsure of the region, choose the most likely one. Never invent details "
-    "that are not supported by the text or image."
+    "If unsure of the region, choose the most likely one. The summary_hebrew "
+    "field MUST be written in Hebrew. Never invent details that are not "
+    "supported by the text or image."
 )
 
 
@@ -67,6 +71,7 @@ class ThreatVerdict:
     region: str
     threat_severity: int
     visual_summary: str
+    summary_hebrew: str
     raw: dict
 
     def as_db_fields(self) -> dict:
@@ -75,6 +80,7 @@ class ThreatVerdict:
             "region": self.region,
             "threat_severity": self.threat_severity,
             "visual_summary": self.visual_summary,
+            "summary_hebrew": self.summary_hebrew,
             "analysis": self.raw,
         }
 
@@ -145,25 +151,101 @@ def _detect_mime(data: bytes) -> str:
 
 
 def _data_url(image_bytes: bytes) -> str:
-    """Build a base64 data URL for the OpenRouter Vision ``image_url`` field."""
+    """Build a base64 data URL for the Vision ``image_url`` field."""
     mime = _detect_mime(image_bytes)
     b64 = base64.b64encode(image_bytes).decode("utf-8")
     return f"data:{mime};base64,{b64}"
 
 
+def _build_prompt(text: str, title: str = "") -> str:
+    return (
+        f"TITLE: {title}\n\nTEXT:\n{text or '(no text provided)'}\n\n"
+        "Return the JSON verdict now."
+    )
+
+
+def _build_verdict(parsed: dict, content: str) -> ThreatVerdict:
+    """Coerce a parsed model JSON object into a normalized ThreatVerdict."""
+    return ThreatVerdict(
+        is_threat=bool(parsed.get("is_threat", False)),
+        region=_normalize_region(parsed.get("region")),
+        threat_severity=_clamp_severity(parsed.get("threat_severity", 1)),
+        visual_summary=str(parsed.get("visual_summary", "") or "")[:2000],
+        summary_hebrew=str(parsed.get("summary_hebrew", "") or "")[:2000],
+        raw=parsed or {"_unparsed": content[:2000]},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Groq Cloud (Llama 4 Scout) via the OpenAI-compatible client
+# ---------------------------------------------------------------------------
+def _groq_request(
+    text: str,
+    image_bytes: Optional[bytes] = None,
+    title: str = "",
+) -> tuple[ThreatVerdict, int, dict]:
+    """Run analysis on Groq Cloud using the openai client spec."""
+    if not settings.GROQ_API_KEY:
+        raise RuntimeError("GROQ_API_KEY is not configured.")
+
+    from openai import OpenAI  # lazy import keeps module import light
+
+    client = OpenAI(
+        api_key=settings.GROQ_API_KEY,
+        base_url=settings.GROQ_BASE_URL,
+        timeout=REQUEST_TIMEOUT,
+    )
+
+    prompt_text = _build_prompt(text, title)
+    if image_bytes:
+        # Llama 4 Scout is multimodal: send a typed content array with the image.
+        user_content = [
+            {"type": "text", "text": prompt_text},
+            {"type": "image_url", "image_url": {"url": _data_url(image_bytes)}},
+        ]
+    else:
+        user_content = prompt_text
+
+    completion = client.chat.completions.create(
+        model=settings.GROQ_MODEL,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        temperature=0.1,
+        response_format={"type": "json_object"},
+    )
+
+    content = (completion.choices[0].message.content or "") if completion.choices else ""
+    parsed = _extract_json(content)
+    verdict = _build_verdict(parsed, content)
+
+    try:
+        body = completion.model_dump()
+    except Exception:
+        body = {"_content": content[:4000]}
+
+    logger.info(
+        "Groq Llama4 Scout verdict (%s): threat=%s region=%s severity=%s",
+        settings.GROQ_MODEL,
+        verdict.is_threat, verdict.region, verdict.threat_severity,
+    )
+    return verdict, 200, body
+
+
+# ---------------------------------------------------------------------------
+# OpenRouter (legacy / fallback vision model) via raw requests
+# ---------------------------------------------------------------------------
 def _analyze_request(
     text: str,
     image_bytes: Optional[bytes] = None,
     title: str = "",
 ) -> tuple[ThreatVerdict, int, dict]:
-    """Shared implementation for analyze() and analyze_with_diagnostics()."""
+    """OpenRouter implementation (used when AI_PROVIDER == 'openrouter')."""
     if not settings.OPENROUTER_API_KEY:
         raise RuntimeError("OPENROUTER_API_KEY is not configured.")
 
-    prompt_text = (
-        f"TITLE: {title}\n\nTEXT:\n{text or '(no text provided)'}\n\n"
-        "Return the JSON verdict now."
-    )
+    prompt_text = _build_prompt(text, title)
 
     # Multimodal messages use a content array of typed parts; text-only items
     # may use a plain string. We always use the array form for consistency.
@@ -206,14 +288,7 @@ def _analyze_request(
         body.get("choices", [{}])[0].get("message", {}).get("content", "")
     )
     parsed = _extract_json(content)
-
-    verdict = ThreatVerdict(
-        is_threat=bool(parsed.get("is_threat", False)),
-        region=_normalize_region(parsed.get("region")),
-        threat_severity=_clamp_severity(parsed.get("threat_severity", 1)),
-        visual_summary=str(parsed.get("visual_summary", "") or "")[:2000],
-        raw=parsed or {"_unparsed": content[:2000]},
-    )
+    verdict = _build_verdict(parsed, content)
     logger.info(
         "OpenRouter verdict (%s): threat=%s region=%s severity=%s",
         settings.OPENROUTER_MODEL,
@@ -222,17 +297,30 @@ def _analyze_request(
     return verdict, response.status_code, body
 
 
+# ---------------------------------------------------------------------------
+# Provider dispatch
+# ---------------------------------------------------------------------------
+def _provider_request(
+    text: str,
+    image_bytes: Optional[bytes] = None,
+    title: str = "",
+) -> tuple[ThreatVerdict, int, dict]:
+    if getattr(settings, "AI_PROVIDER", "groq") == "openrouter":
+        return _analyze_request(text, image_bytes=image_bytes, title=title)
+    return _groq_request(text, image_bytes=image_bytes, title=title)
+
+
 def analyze(
     text: str,
     image_bytes: Optional[bytes] = None,
     title: str = "",
 ) -> ThreatVerdict:
     """
-    Run multimodal analysis via OpenRouter. When ``image_bytes`` is provided it
-    is base64-encoded and sent alongside the text using the Vision API content
-    structure so the model can reason over visual cues.
+    Run analysis via the configured provider (Groq by default). When
+    ``image_bytes`` is provided it is base64-encoded and sent alongside the
+    text so a multimodal model can reason over visual cues.
     """
-    verdict, _, _ = _analyze_request(text, image_bytes=image_bytes, title=title)
+    verdict, _, _ = _provider_request(text, image_bytes=image_bytes, title=title)
     return verdict
 
 
@@ -242,20 +330,30 @@ def analyze_with_diagnostics(
     title: str = "",
 ) -> tuple[ThreatVerdict, int, dict]:
     """
-    Like ``analyze`` but also returns the HTTP status code and the raw OpenRouter
-    JSON body (for diagnostics / management-command telemetry).
+    Like ``analyze`` but also returns the HTTP status code and the raw provider
+    response body (for diagnostics / management-command telemetry).
     """
-    return _analyze_request(text, image_bytes=image_bytes, title=title)
+    return _provider_request(text, image_bytes=image_bytes, title=title)
+
+
+def active_model() -> str:
+    """Return the model id for the currently selected provider."""
+    if getattr(settings, "AI_PROVIDER", "groq") == "openrouter":
+        return settings.OPENROUTER_MODEL
+    return settings.GROQ_MODEL
 
 
 def ensure_model_available() -> bool:
     """Health/diagnostics: analysis is possible only if a key is configured."""
-    return bool(settings.OPENROUTER_API_KEY)
+    if getattr(settings, "AI_PROVIDER", "groq") == "openrouter":
+        return bool(settings.OPENROUTER_API_KEY)
+    return bool(settings.GROQ_API_KEY)
 
 
 __all__ = [
     "analyze",
     "analyze_with_diagnostics",
+    "active_model",
     "ThreatVerdict",
     "ensure_model_available",
 ]

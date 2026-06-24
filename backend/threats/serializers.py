@@ -30,7 +30,7 @@ class AlertSerializer(serializers.ModelSerializer):
             "id", "source", "source_name", "source_type", "external_id",
             "title", "content", "url", "image", "image_url", "has_image",
             "status", "status_display", "is_threat", "region", "region_display",
-            "threat_severity", "visual_summary", "analysis",
+            "threat_severity", "visual_summary", "summary_hebrew", "analysis",
             "published_at", "analyzed_at", "created_at",
         ]
 
