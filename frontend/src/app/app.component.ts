@@ -12,6 +12,8 @@ interface NavItem {
   label: string;
   route: string;
   icon: string;
+  /** 'auth' = signed-in only, 'guest' = signed-out only, 'any' = always. */
+  visibility: 'auth' | 'guest' | 'any';
 }
 
 @Component({
@@ -20,18 +22,17 @@ interface NavItem {
   imports: [CommonModule, RouterOutlet, RouterLink, RouterLinkActive],
   template: `
     <div class="min-h-screen bg-slate-950 text-slate-100">
-      <!-- Top header -->
+      <!-- ── Top header bar ─────────────────────────────────────────── -->
       <header
         class="sticky top-0 z-30 border-b border-slate-800 bg-slate-950/80 backdrop-blur"
       >
         <div class="flex items-center gap-3 px-4 py-3">
+          <!-- Hamburger toggle -->
           <button
-            *ngIf="isAuthed"
             (click)="toggleSidebar()"
             aria-label="Toggle navigation"
-            class="inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-300 ring-1 ring-slate-700 transition hover:bg-slate-800"
+            class="inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-300 ring-1 ring-slate-700 transition hover:bg-slate-800 hover:text-white"
           >
-            <!-- Hamburger / close icon -->
             <svg
               *ngIf="!sidebarOpen"
               xmlns="http://www.w3.org/2000/svg"
@@ -97,23 +98,29 @@ interface NavItem {
         </div>
       </header>
 
-      <!-- Backdrop -->
+      <!-- ── Backdrop overlay (click to close) ──────────────────────── -->
       <div
-        *ngIf="isAuthed && sidebarOpen"
+        *ngIf="sidebarOpen"
         (click)="closeSidebar()"
         class="fixed inset-0 z-30 bg-black/50 backdrop-blur-sm transition-opacity"
       ></div>
 
-      <!-- Sidebar drawer -->
+      <!-- ── Collapsible sidebar drawer ─────────────────────────────── -->
       <aside
-        *ngIf="isAuthed"
-        class="fixed inset-y-0 left-0 z-40 flex w-64 transform flex-col border-r border-slate-800 bg-slate-900 shadow-2xl transition-transform duration-300 ease-in-out"
+        class="fixed inset-y-0 left-0 z-40 flex w-64 transform flex-col border-r border-slate-800 bg-gradient-to-b from-slate-900 to-slate-950 shadow-2xl transition-transform duration-300 ease-in-out"
         [ngClass]="sidebarOpen ? 'translate-x-0' : '-translate-x-full'"
       >
         <div
           class="flex items-center justify-between border-b border-slate-800 px-4 py-4"
         >
-          <span class="text-sm font-semibold text-slate-200">Navigation</span>
+          <div class="flex items-center gap-2">
+            <span class="text-lg">🛰️</span>
+            <span
+              class="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400"
+            >
+              Intelligence Console
+            </span>
+          </div>
           <button
             (click)="closeSidebar()"
             aria-label="Close navigation"
@@ -134,9 +141,9 @@ interface NavItem {
 
         <nav class="flex-1 space-y-1 overflow-y-auto p-3">
           <a
-            *ngFor="let item of navItems"
+            *ngFor="let item of visibleNavItems"
             [routerLink]="item.route"
-            routerLinkActive="bg-slate-800 text-white ring-1 ring-slate-700"
+            routerLinkActive="bg-slate-800 text-white ring-1 ring-sky-700/60"
             (click)="closeSidebar()"
             class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-slate-300 transition hover:bg-slate-800 hover:text-white"
           >
@@ -146,19 +153,27 @@ interface NavItem {
         </nav>
 
         <div class="border-t border-slate-800 p-4">
-          <p class="text-xs text-slate-500">Signed in as</p>
-          <p class="truncate text-sm font-medium text-slate-200">
-            {{ auth.username }}
-          </p>
-          <button
-            (click)="logout()"
-            class="mt-3 w-full rounded-md px-3 py-2 text-xs font-medium text-slate-300 ring-1 ring-slate-700 transition hover:bg-slate-800"
-          >
-            Sign out
-          </button>
+          <ng-container *ngIf="isAuthed; else guestFooter">
+            <p class="text-xs text-slate-500">Signed in as</p>
+            <p class="truncate text-sm font-medium text-slate-200">
+              {{ auth.username }}
+            </p>
+            <button
+              (click)="logout()"
+              class="mt-3 w-full rounded-md px-3 py-2 text-xs font-medium text-slate-300 ring-1 ring-slate-700 transition hover:bg-slate-800"
+            >
+              Sign out
+            </button>
+          </ng-container>
+          <ng-template #guestFooter>
+            <p class="text-xs text-slate-500">
+              Sign in to access the live dashboard and source manager.
+            </p>
+          </ng-template>
         </div>
       </aside>
 
+      <!-- ── Routed content ─────────────────────────────────────────── -->
       <main class="mx-auto max-w-7xl px-4 py-6">
         <router-outlet></router-outlet>
       </main>
@@ -168,9 +183,11 @@ interface NavItem {
 export class AppComponent {
   sidebarOpen = false;
 
-  readonly navItems: NavItem[] = [
-    { label: 'Dashboard', route: '/dashboard', icon: '📊' },
-    { label: 'Sources', route: '/admin/sources', icon: '🛰️' },
+  private readonly navItems: NavItem[] = [
+    { label: 'Dashboard', route: '/dashboard', icon: '📊', visibility: 'auth' },
+    { label: 'Manage Sources', route: '/admin/sources', icon: '⚙️', visibility: 'auth' },
+    { label: 'Login', route: '/login', icon: '🔑', visibility: 'guest' },
+    { label: 'Register', route: '/register', icon: '📝', visibility: 'guest' },
   ];
 
   constructor(
@@ -180,6 +197,13 @@ export class AppComponent {
 
   get isAuthed(): boolean {
     return this.auth.hasToken();
+  }
+
+  get visibleNavItems(): NavItem[] {
+    return this.navItems.filter((item) => {
+      if (item.visibility === 'any') return true;
+      return item.visibility === 'auth' ? this.isAuthed : !this.isAuthed;
+    });
   }
 
   toggleSidebar(): void {
@@ -192,7 +216,6 @@ export class AppComponent {
 
   logout(): void {
     this.closeSidebar();
-    this.auth.logout();
-    this.router.navigateByUrl('/login');
+    this.auth.logout(); // AuthService clears tokens and redirects to /login.
   }
 }

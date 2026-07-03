@@ -27,6 +27,12 @@ VALID_REGIONS = {
     "judea_samaria", "golan_heights", "north", "south", "central", "unknown",
 }
 
+VALID_COUNTRIES = {
+    "israel", "lebanon", "syria", "jordan", "egypt", "iraq",
+    "arabian_peninsula", "gulf_states", "iran", "turkey", "mediterranean",
+    "unknown",
+}
+
 # Map human-friendly model labels onto our DB choice values.
 _REGION_ALIASES = {
     "judea & samaria": "judea_samaria",
@@ -44,30 +50,73 @@ _REGION_ALIASES = {
     "center": "central",
 }
 
+_COUNTRY_ALIASES = {
+    "israel": "israel",
+    "lebanon": "lebanon",
+    "syria": "syria",
+    "jordan": "jordan",
+    "egypt": "egypt",
+    "iraq": "iraq",
+    "arabian peninsula": "arabian_peninsula",
+    "arabian_peninsula": "arabian_peninsula",
+    "saudi arabia": "arabian_peninsula",
+    "yemen": "arabian_peninsula",
+    "gulf states": "gulf_states",
+    "gulf_states": "gulf_states",
+    "persian gulf states": "gulf_states",
+    "persian gulf": "gulf_states",
+    "uae": "gulf_states",
+    "qatar": "gulf_states",
+    "bahrain": "gulf_states",
+    "kuwait": "gulf_states",
+    "oman": "gulf_states",
+    "iran": "iran",
+    "turkey": "turkey",
+    "turkiye": "turkey",
+    "mediterranean": "mediterranean",
+    "mediterranean region": "mediterranean",
+    "mediterranean sea": "mediterranean",
+}
+
 SYSTEM_PROMPT = (
-    "You are a geopolitical security analyst monitoring threats to Israel, "
-    "including Judea & Samaria (the West Bank) and the Golan Heights. "
+    "You are a Senior OSINT (Open Source Intelligence) Analyst specializing in "
+    "Middle East security. You monitor and triage threats across the entire "
+    "region: Israel (including Judea & Samaria / the West Bank and the Golan "
+    "Heights), Lebanon, Syria, Jordan, Egypt, Iraq, the Arabian Peninsula, the "
+    "Persian Gulf States, Iran, Turkey, and the Mediterranean Region.\n"
     "You receive an intelligence item that may include text and an image. "
     "Analyze BOTH the text and any visual cues in the image (weapons, fires, "
-    "smoke, crowds, rockets, military vehicles, damaged buildings, maps, "
-    "uniforms, flags). Respond with ONLY a single valid JSON object and no "
-    "prose, markdown, or code fences. The JSON schema is:\n"
+    "smoke, crowds, rockets, drones, missiles, military vehicles, naval assets, "
+    "damaged buildings, maps, uniforms, flags).\n"
+    "Respond with ONLY a single valid JSON object — no prose, markdown, or code "
+    "fences. The JSON schema is:\n"
     "{\n"
     '  "is_threat": boolean,            // true if it indicates a security threat\n'
+    '  "country": string,              // one of: "Israel", "Lebanon", "Syria", "Jordan", "Egypt", "Iraq", "Arabian Peninsula", "Persian Gulf States", "Iran", "Turkey", "Mediterranean Region"\n'
     '  "region": string,               // one of: "Judea & Samaria", "Golan Heights", "North", "South", "Central"\n'
     '  "threat_severity": integer,      // 1 (negligible) to 10 (critical/imminent)\n'
     '  "visual_summary": string,        // short description of what is visible in the image, "" if no image\n'
-    '  "summary_hebrew": string         // concise summary of the item IN HEBREW (עברית)\n'
+    '  "summary_hebrew": string         // intelligence-grade summary, see rules below\n'
     "}\n"
-    "If unsure of the region, choose the most likely one. The summary_hebrew "
-    "field MUST be written in Hebrew. Never invent details that are not "
-    "supported by the text or image."
+    "STRICT RULES FOR summary_hebrew:\n"
+    "1. It MUST be written in pure, grammatically perfect, professional "
+    "military/intelligence-grade Modern Hebrew (עברית תקנית).\n"
+    "2. It MUST be a concise, factual assessment (1-3 sentences) of the event.\n"
+    "3. It is STRICTLY FORBIDDEN to output placeholders, lorem-ipsum, repeated "
+    "or looping characters, mojibake/broken encodings, or any non-Hebrew "
+    "gibberish (e.g. 'בייוי היוווי'). If you cannot summarize confidently, "
+    'write exactly: "אין מספיק מידע לניתוח מודיעיני".\n'
+    "4. Do NOT mix languages inside summary_hebrew; Hebrew only (digits and "
+    "proper nouns are allowed).\n"
+    "If unsure of the country or region, choose the single most likely value. "
+    "Never invent details that are not supported by the text or image."
 )
 
 
 @dataclass
 class ThreatVerdict:
     is_threat: bool
+    country: str
     region: str
     threat_severity: int
     visual_summary: str
@@ -77,6 +126,7 @@ class ThreatVerdict:
     def as_db_fields(self) -> dict:
         return {
             "is_threat": self.is_threat,
+            "country": self.country,
             "region": self.region,
             "threat_severity": self.threat_severity,
             "visual_summary": self.visual_summary,
@@ -92,6 +142,17 @@ def _normalize_region(value: Optional[str]) -> str:
     if key in _REGION_ALIASES:
         return _REGION_ALIASES[key]
     if key in VALID_REGIONS:
+        return key
+    return "unknown"
+
+
+def _normalize_country(value: Optional[str]) -> str:
+    if not value:
+        return "unknown"
+    key = str(value).strip().lower()
+    if key in _COUNTRY_ALIASES:
+        return _COUNTRY_ALIASES[key]
+    if key in VALID_COUNTRIES:
         return key
     return "unknown"
 
@@ -168,6 +229,7 @@ def _build_verdict(parsed: dict, content: str) -> ThreatVerdict:
     """Coerce a parsed model JSON object into a normalized ThreatVerdict."""
     return ThreatVerdict(
         is_threat=bool(parsed.get("is_threat", False)),
+        country=_normalize_country(parsed.get("country")),
         region=_normalize_region(parsed.get("region")),
         threat_severity=_clamp_severity(parsed.get("threat_severity", 1)),
         visual_summary=str(parsed.get("visual_summary", "") or "")[:2000],

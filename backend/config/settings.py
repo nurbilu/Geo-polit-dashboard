@@ -54,6 +54,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     # Third party
     "rest_framework",
+    "rest_framework_simplejwt.token_blacklist",
     "django_filters",
     "corsheaders",
     # Local
@@ -161,15 +162,17 @@ REST_FRAMEWORK = {
 }
 
 # --- JWT (djangorestframework-simplejwt) -------------------------------
+# Short-lived access tokens + longer refresh tokens with rotation and
+# blacklisting (old refresh tokens are invalidated once rotated).
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(
-        minutes=int(env("JWT_ACCESS_MINUTES", "60"))
+        minutes=int(env("JWT_ACCESS_MINUTES", "15"))
     ),
     "REFRESH_TOKEN_LIFETIME": timedelta(
         days=int(env("JWT_REFRESH_DAYS", "7"))
     ),
     "ROTATE_REFRESH_TOKENS": True,
-    "BLACKLIST_AFTER_ROTATION": False,
+    "BLACKLIST_AFTER_ROTATION": True,
     "AUTH_HEADER_TYPES": ("Bearer",),
     "SIGNING_KEY": SECRET_KEY,
 }

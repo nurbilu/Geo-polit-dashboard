@@ -3,6 +3,8 @@ import { Component } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Observable } from 'rxjs';
 import { DashboardGridComponent } from '../dashboard-grid/dashboard-grid.component';
+import { AnalyticsDashboardComponent } from '../analytics-dashboard/analytics-dashboard.component';
+import { ThreatMapComponent } from '../threat-map/threat-map.component';
 import { ThreatFeedComponent } from '../threat-feed/threat-feed.component';
 import {
   Alert,
@@ -20,6 +22,8 @@ import { environment } from '../../../environments/environment';
     CommonModule,
     FormsModule,
     DashboardGridComponent,
+    AnalyticsDashboardComponent,
+    ThreatMapComponent,
     ThreatFeedComponent,
   ],
   template: `
@@ -98,6 +102,10 @@ import { environment } from '../../../environments/environment';
     <p class="mt-3 text-xs text-slate-500">
       Live polling every {{ pollSeconds }}s · auto-refreshing without WebSockets.
     </p>
+
+    <app-threat-map [alerts]="alerts$ | async"></app-threat-map>
+
+    <app-analytics-dashboard [alerts]="alerts$ | async"></app-analytics-dashboard>
 
     <div class="mt-4">
       <app-threat-feed [alerts]="alerts$ | async"></app-threat-feed>

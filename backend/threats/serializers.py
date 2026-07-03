@@ -73,18 +73,22 @@ class SourceSerializer(serializers.ModelSerializer):
 class AlertSerializer(serializers.ModelSerializer):
     source_name = serializers.CharField(source="source.name", read_only=True)
     source_type = serializers.CharField(source="source.source_type", read_only=True)
+    country_display = serializers.CharField(source="get_country_display", read_only=True)
     region_display = serializers.CharField(source="get_region_display", read_only=True)
     status_display = serializers.CharField(source="get_status_display", read_only=True)
     image = serializers.SerializerMethodField()
     has_image = serializers.BooleanField(read_only=True)
+    is_primary = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = Alert
         fields = [
             "id", "source", "source_name", "source_type", "external_id",
             "title", "content", "url", "image", "image_url", "has_image",
-            "status", "status_display", "is_threat", "region", "region_display",
+            "status", "status_display", "is_threat",
+            "country", "country_display", "region", "region_display",
             "threat_severity", "visual_summary", "summary_hebrew", "analysis",
+            "parent_alert", "cluster_count", "is_primary",
             "published_at", "analyzed_at", "created_at",
         ]
 

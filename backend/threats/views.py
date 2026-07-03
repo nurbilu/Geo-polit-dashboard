@@ -75,7 +75,9 @@ class AlertViewSet(
     """
 
     serializer_class = AlertSerializer
-    filterset_fields = ["region", "is_threat", "status", "source__source_type"]
+    filterset_fields = [
+        "country", "region", "is_threat", "status", "source__source_type",
+    ]
     search_fields = ["title", "content", "visual_summary"]
     ordering_fields = ["published_at", "threat_severity", "created_at"]
 

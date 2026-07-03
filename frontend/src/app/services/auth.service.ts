@@ -1,6 +1,7 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable } from '@angular/core';
-import { BehaviorSubject, Observable, map, tap } from 'rxjs';
+import { Router } from '@angular/router';
+import { BehaviorSubject, Observable, map, tap, throwError } from 'rxjs';
 import { environment } from '../../environments/environment';
 
 interface TokenPair {
@@ -38,7 +39,10 @@ export class AuthService {
 
   readonly isAuthenticated$ = this.authState$.asObservable();
 
-  constructor(private http: HttpClient) {}
+  constructor(
+    private http: HttpClient,
+    private router: Router,
+  ) {}
 
   login(username: string, password: string): Observable<void> {
     return this.http
@@ -61,15 +65,34 @@ export class AuthService {
     localStorage.removeItem(REFRESH_KEY);
     localStorage.removeItem(USER_KEY);
     this.authState$.next(false);
+    this.router.navigateByUrl('/login');
   }
 
-  refresh(): Observable<void> {
+  /**
+   * Exchange the stored refresh token for a new access token (and, with
+   * rotation enabled, a new refresh token). Emits the fresh access token so the
+   * interceptor can replay the original request. Errors if no refresh token is
+   * present so the caller can force a logout.
+   */
+  refreshToken(): Observable<string> {
     const refresh = localStorage.getItem(REFRESH_KEY);
+    if (!refresh) {
+      return throwError(() => new Error('No refresh token available.'));
+    }
     return this.http
-      .post<{ access: string }>(`${this.base}/auth/token/refresh/`, { refresh })
+      .post<{ access: string; refresh?: string }>(
+        `${this.base}/auth/token/refresh/`,
+        { refresh },
+      )
       .pipe(
-        tap(({ access }) => localStorage.setItem(ACCESS_KEY, access)),
-        map(() => void 0),
+        tap((tokens) => {
+          localStorage.setItem(ACCESS_KEY, tokens.access);
+          // With ROTATE_REFRESH_TOKENS the server returns a new refresh token.
+          if (tokens.refresh) {
+            localStorage.setItem(REFRESH_KEY, tokens.refresh);
+          }
+        }),
+        map((tokens) => tokens.access),
       );
   }
 

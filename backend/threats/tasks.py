@@ -20,17 +20,35 @@ import requests
 from celery import shared_task
 from django.conf import settings
 from django.core.files.base import ContentFile
-from django.db.models import Avg, Count, Q
+from django.db.models import Avg, Count, F, Q
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
-from . import llama4_service
+from . import llama4_service, notification_service
 from .models import Alert, AlertStatus, Metric, Region, Source, SourceType
 
 logger = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT = 30
 MAX_IMAGE_BYTES = 12 * 1024 * 1024  # 12 MB safety cap.
+
+# Primary alerts at/above this severity trigger an instant Telegram notification.
+CRITICAL_SEVERITY_THRESHOLD = 8
+
+# --- Deduplication / clustering tuning ---
+DEDUP_WINDOW_MINUTES = 15      # only cluster with events seen this recently
+DEDUP_CANDIDATE_LIMIT = 50     # cap candidates scanned per analysis (low overhead)
+DEDUP_JACCARD_THRESHOLD = 0.35  # keyword-set similarity to treat as the same event
+DEDUP_MIN_SHARED_KEYWORDS = 4  # or this many shared keywords (helps long texts)
+
+# Latin (>=3 chars) and Hebrew word tokens; digits/punctuation ignored.
+_KEYWORD_RE = re.compile(r"[a-zA-Z\u0590-\u05FF]{3,}")
+_STOPWORDS = {
+    "the", "and", "for", "are", "was", "were", "with", "that", "this", "from",
+    "have", "has", "had", "not", "but", "you", "your", "our", "who", "will",
+    "near", "into", "onto", "over", "under", "reported", "reports", "report",
+    "alert", "update", "breaking", "local", "area", "areas", "said", "says",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -377,16 +395,139 @@ def analyze_alert(self, alert_id):
             return {"alert": alert_id, "status": "failed", "error": str(exc)}
         raise self.retry(exc=exc)
 
+    now = timezone.now()
     fields = verdict.as_db_fields()
     fields["status"] = AlertStatus.ANALYZED
-    fields["analyzed_at"] = timezone.now()
+    fields["analyzed_at"] = now
+
+    # --- Deduplication / clustering -------------------------------------
+    # Group this item under an existing primary alert for the same event when
+    # one was seen very recently in the same region with overlapping keywords.
+    parent_id = _cluster_parent_id(alert, verdict, now)
+    if parent_id is not None:
+        fields["parent_alert_id"] = parent_id
     Alert.objects.filter(id=alert_id).update(**fields)
+
+    if parent_id is not None:
+        # Single-row atomic bump: no table lock, safe under active polling.
+        Alert.objects.filter(id=parent_id).update(
+            cluster_count=F("cluster_count") + 1,
+            updated_at=now,
+        )
+        logger.info("Alert %s clustered under primary %s.", alert_id, parent_id)
+
+    # --- Critical-threat alerting ---------------------------------------
+    # Only fire for primary (non-duplicate) alerts at/above the threshold. The
+    # dispatch is queued as its own task so a slow Telegram response can never
+    # delay this analysis loop.
+    notified = False
+    if (
+        parent_id is None
+        and (verdict.threat_severity or 0) >= CRITICAL_SEVERITY_THRESHOLD
+    ):
+        dispatch_critical_notification.delay(alert_id)
+        notified = True
 
     # Update rollups for the affected day/region.
     rebuild_metrics.delay(
         region=verdict.region, day=alert.published_at.date().isoformat()
     )
-    return {"alert": alert_id, "status": "analyzed", "is_threat": verdict.is_threat}
+    return {
+        "alert": alert_id,
+        "status": "analyzed",
+        "is_threat": verdict.is_threat,
+        "clustered_under": parent_id,
+        "critical_notified": notified,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Critical-threat notification dispatch
+# ---------------------------------------------------------------------------
+@shared_task(ignore_result=True)
+def dispatch_critical_notification(alert_id):
+    """
+    Send an instant Telegram notification for a critical primary alert.
+
+    Runs in its own Celery task (queued via .delay) so the network round-trip to
+    Telegram never blocks the analysis pipeline. Re-validates state defensively.
+    """
+    try:
+        alert = Alert.objects.get(id=alert_id)
+    except Alert.DoesNotExist:
+        return {"skipped": alert_id}
+
+    if alert.parent_alert_id is not None:
+        return {"alert": alert_id, "sent": False, "reason": "not_primary"}
+    if (alert.threat_severity or 0) < CRITICAL_SEVERITY_THRESHOLD:
+        return {"alert": alert_id, "sent": False, "reason": "below_threshold"}
+
+    sent = notification_service.notify_critical_alert(alert)
+    return {"alert": alert_id, "sent": sent}
+
+
+# ---------------------------------------------------------------------------
+# Deduplication / event clustering helpers
+# ---------------------------------------------------------------------------
+def _keywords(*texts) -> set:
+    """Extract a normalized keyword set (latin + hebrew words, no stopwords)."""
+    tokens = set()
+    for text in texts:
+        for match in _KEYWORD_RE.findall((text or "").lower()):
+            if match not in _STOPWORDS:
+                tokens.add(match)
+    return tokens
+
+
+def _is_similar(a: set, b: set) -> bool:
+    """Cheap set-based similarity: Jaccard threshold OR strong shared-keyword count."""
+    if not a or not b:
+        return False
+    shared = len(a & b)
+    if shared == 0:
+        return False
+    if shared >= DEDUP_MIN_SHARED_KEYWORDS:
+        return True
+    union = len(a | b)
+    return (shared / union) >= DEDUP_JACCARD_THRESHOLD
+
+
+def _cluster_parent_id(alert, verdict, now):
+    """
+    Find a recent primary alert in the same region describing the same event.
+
+    Returns the primary alert id to attach to, or None to keep this as a new
+    primary. Kept intentionally lightweight: bounded candidate scan, no locks.
+    """
+    region = verdict.region
+    # An unknown region carries no clustering signal; skip to avoid over-merging.
+    if region == Region.UNKNOWN:
+        return None
+
+    window_start = now - timedelta(minutes=DEDUP_WINDOW_MINUTES)
+    new_keywords = _keywords(alert.title, alert.content, verdict.visual_summary)
+    if not new_keywords:
+        return None
+
+    candidates = (
+        Alert.objects.filter(
+            region=region,
+            parent_alert__isnull=True,          # only cluster under primaries
+            status=AlertStatus.ANALYZED,
+            analyzed_at__gte=window_start,
+        )
+        .exclude(id=alert.id)
+        .order_by("-analyzed_at")
+        .values("id", "title", "content", "visual_summary")[:DEDUP_CANDIDATE_LIMIT]
+    )
+
+    for cand in candidates:
+        cand_keywords = _keywords(
+            cand["title"], cand["content"], cand["visual_summary"]
+        )
+        if _is_similar(new_keywords, cand_keywords):
+            return cand["id"]
+    return None
 
 
 def _read_image_bytes(alert):

@@ -252,7 +252,7 @@ docker compose up -d --build              # start stack (detached)
 docker compose stop                       # pause containers (keep volumes)
 docker compose start                      # resume after stop
 docker compose down                       # remove containers (volumes kept)
-docker compose down --rmi all             # remove 
+docker compose down --rmi all             # remove containers + built images
 docker compose down -v                    # ⚠ wipe db/redis/media volumes
 docker compose ps                         # service status
 docker compose build web celery_worker    # rebuild backend images only
@@ -266,7 +266,8 @@ docker compose logs -f --tail=100         # all services (last 100 lines)
 
 # Django shell inside web
 docker compose exec web python manage.py check
-docker compose exec web python manage.py migrate
+docker-compose exec web python manage.py makemigrations
+docker-compose exec web python manage.py migrate
 docker compose exec web python manage.py seed_admin
 docker compose exec web python manage.py seed_sources
 docker compose exec web python manage.py test_openrouter_pipeline --no-save

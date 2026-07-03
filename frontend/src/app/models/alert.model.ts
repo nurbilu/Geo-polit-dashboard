@@ -6,6 +6,20 @@ export type Region =
   | 'central'
   | 'unknown';
 
+export type Country =
+  | 'israel'
+  | 'lebanon'
+  | 'syria'
+  | 'jordan'
+  | 'egypt'
+  | 'iraq'
+  | 'arabian_peninsula'
+  | 'gulf_states'
+  | 'iran'
+  | 'turkey'
+  | 'mediterranean'
+  | 'unknown';
+
 export interface Alert {
   id: number;
   source: number;
@@ -21,12 +35,17 @@ export interface Alert {
   status: string;
   status_display: string;
   is_threat: boolean | null;
+  country: Country;
+  country_display: string;
   region: Region;
   region_display: string;
   threat_severity: number | null;
   visual_summary: string;
   summary_hebrew: string;
   analysis: Record<string, unknown>;
+  parent_alert: number | null;
+  cluster_count: number;
+  is_primary: boolean;
   published_at: string;
   analyzed_at: string | null;
   created_at: string;

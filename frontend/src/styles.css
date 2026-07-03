@@ -1,10 +1,49 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
 html,
 body {
   height: 100%;
   margin: 0;
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.leaflet-container {
+  background: #020617;
+}
+
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip {
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+.leaflet-tooltip {
+  background: rgba(2, 6, 23, 0.8);
+  border-color: #334155;
+  color: #cbd5e1;
+  font-size: 11px;
+}
+
+.leaflet-threat-flash {
+  animation: threatPulse 1s ease-in-out infinite;
+}
+
+.leaflet-threat-dot {
+  animation: threatPulse 1s ease-in-out infinite;
+}
+
+@keyframes threatPulse {
+  0% {
+    opacity: 1;
+    filter: drop-shadow(0 0 0 rgba(248, 113, 113, 0));
+  }
+  50% {
+    opacity: 0.55;
+    filter: drop-shadow(0 0 6px rgba(248, 113, 113, 0.9));
+  }
+  100% {
+    opacity: 1;
+    filter: drop-shadow(0 0 0 rgba(248, 113, 113, 0));
+  }
 }

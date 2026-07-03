@@ -12,6 +12,23 @@ class Region(models.TextChoices):
     UNKNOWN = "unknown", "Unknown"
 
 
+class Country(models.TextChoices):
+    """Expanded Middle East geospatial coverage."""
+
+    ISRAEL = "israel", "Israel"
+    LEBANON = "lebanon", "Lebanon"
+    SYRIA = "syria", "Syria"
+    JORDAN = "jordan", "Jordan"
+    EGYPT = "egypt", "Egypt"
+    IRAQ = "iraq", "Iraq"
+    ARABIAN_PENINSULA = "arabian_peninsula", "Arabian Peninsula"
+    GULF_STATES = "gulf_states", "Persian Gulf States"
+    IRAN = "iran", "Iran"
+    TURKEY = "turkey", "Turkey"
+    MEDITERRANEAN = "mediterranean", "Mediterranean Region"
+    UNKNOWN = "unknown", "Unknown"
+
+
 class SourceType(models.TextChoices):
     TELEGRAM = "telegram", "Telegram Channel"
     X = "x", "X (Twitter) Handle"
@@ -82,6 +99,10 @@ class Alert(models.Model):
         max_length=20, choices=AlertStatus.choices, default=AlertStatus.PENDING
     )
     is_threat = models.BooleanField(null=True, blank=True)
+    country = models.CharField(
+        max_length=32, choices=Country.choices, default=Country.UNKNOWN,
+        help_text="Country / macro-area the item concerns (Middle East coverage).",
+    )
     region = models.CharField(
         max_length=20, choices=Region.choices, default=Region.UNKNOWN
     )
@@ -101,6 +122,23 @@ class Alert(models.Model):
     )
     analyzed_at = models.DateTimeField(null=True, blank=True)
 
+    # --- Deduplication / event clustering ---
+    # Related messages about the same real-world event are grouped under a single
+    # primary alert. A primary alert has parent_alert=None; its duplicates point
+    # to it via parent_alert and appear in `clustered_updates`.
+    parent_alert = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="clustered_updates",
+        help_text="Primary alert this item was clustered under, if a duplicate.",
+    )
+    cluster_count = models.PositiveIntegerField(
+        default=1,
+        help_text="Number of messages grouped under this primary alert (incl. itself).",
+    )
+
     published_at = models.DateTimeField(default=timezone.now)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -116,6 +154,8 @@ class Alert(models.Model):
             models.Index(fields=["status"]),
             models.Index(fields=["region", "is_threat"]),
             models.Index(fields=["-published_at"]),
+            # Speeds up the dedup candidate lookup (same region, recently analyzed).
+            models.Index(fields=["region", "analyzed_at"], name="alert_region_analyzed_idx"),
         ]
 
     def __str__(self):
@@ -125,6 +165,10 @@ class Alert(models.Model):
     @property
     def has_image(self):
         return bool(self.image_path) or bool(self.image_url)
+
+    @property
+    def is_primary(self):
+        return self.parent_alert_id is None
 
 
 class Metric(models.Model):
