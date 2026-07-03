@@ -214,6 +214,11 @@ GROQ_BASE_URL = env("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
 OPENROUTER_API_KEY = env("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL = env("OPENROUTER_MODEL", "meta-llama/llama-3.2-11b-vision-instruct")
 
+# --- Auth / registration ------------------------------------------------
+# Shared secret that gates self-service admin (superuser) registration from the
+# frontend. Keep this out of source control; supply it via .env.
+AUTH_ADMIN_PWD = env("AUTH_ADMIN_PWD", "")
+
 # --- App-specific -------------------------------------------------------
 CATCHUP_WINDOW_HOURS = int(env("CATCHUP_WINDOW_HOURS", "24"))
 

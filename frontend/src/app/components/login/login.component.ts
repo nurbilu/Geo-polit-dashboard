@@ -1,13 +1,13 @@
 import { CommonModule } from '@angular/common';
 import { Component } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { ActivatedRoute, Router } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { AuthService } from '../../services/auth.service';
 
 @Component({
   selector: 'app-login',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, RouterLink],
   template: `
     <div class="flex min-h-[80vh] items-center justify-center px-4">
       <div
@@ -32,7 +32,7 @@ import { AuthService } from '../../services/auth.service';
               autocomplete="username"
               required
               class="w-full rounded-lg bg-slate-950 px-3 py-2 text-sm text-slate-100 ring-1 ring-slate-700 outline-none focus:ring-2 focus:ring-sky-500"
-              placeholder="nurADMIN"
+              placeholder="username"
             />
           </div>
 
@@ -40,15 +40,25 @@ import { AuthService } from '../../services/auth.service';
             <label class="mb-1 block text-xs font-medium text-slate-400">
               Password
             </label>
-            <input
-              name="password"
-              type="password"
-              [(ngModel)]="password"
-              autocomplete="current-password"
-              required
-              class="w-full rounded-lg bg-slate-950 px-3 py-2 text-sm text-slate-100 ring-1 ring-slate-700 outline-none focus:ring-2 focus:ring-sky-500"
-              placeholder="••••••••"
-            />
+            <div class="relative">
+              <input
+                name="password"
+                [type]="showPassword ? 'text' : 'password'"
+                [(ngModel)]="password"
+                autocomplete="current-password"
+                required
+                class="w-full rounded-lg bg-slate-950 px-3 py-2 pr-10 text-sm text-slate-100 ring-1 ring-slate-700 outline-none focus:ring-2 focus:ring-sky-500"
+                placeholder="password"
+              />
+              <button
+                type="button"
+                (click)="showPassword = !showPassword"
+                [attr.aria-label]="showPassword ? 'Hide password' : 'Show password'"
+                class="absolute inset-y-0 right-0 flex items-center px-3 text-slate-400 transition hover:text-slate-200"
+              >
+                {{ showPassword ? '🙈' : '👁️' }}
+              </button>
+            </div>
           </div>
 
           <p
@@ -65,6 +75,13 @@ import { AuthService } from '../../services/auth.service';
           >
             {{ loading ? 'Signing in…' : 'Sign in' }}
           </button>
+
+          <p class="text-center text-xs text-slate-400">
+            No account yet?
+            <a routerLink="/register" class="text-sky-400 hover:underline">
+              Create one
+            </a>
+          </p>
         </form>
       </div>
     </div>
@@ -73,6 +90,7 @@ import { AuthService } from '../../services/auth.service';
 export class LoginComponent {
   username = '';
   password = '';
+  showPassword = false;
   error = '';
   loading = false;
 

@@ -241,3 +241,43 @@ npm start            # ng serve on http://localhost:4200 -> talks to :8000
 You will still need Redis and MySQL reachable at the hosts configured in your
 environment. AI inference needs only outbound HTTPS access to OpenRouter — no
 local model server.
+
+---
+
+## Docker CLI (debugging)
+
+```bash
+# Lifecycle
+docker compose up -d --build              # start stack (detached)
+docker compose stop                       # pause containers (keep volumes)
+docker compose start                      # resume after stop
+docker compose down                       # remove containers (volumes kept)
+docker compose down --rmi all             # remove 
+docker compose down -v                    # ⚠ wipe db/redis/media volumes
+docker compose ps                         # service status
+docker compose build web celery_worker    # rebuild backend images only
+docker compose restart web celery_worker  # reload after .env change
+
+# Logs
+docker compose logs -f web                # Django API
+docker compose logs -f celery_worker      # polling + AI pipeline
+docker compose logs -f celery_beat        # periodic source poll schedule
+docker compose logs -f --tail=100         # all services (last 100 lines)
+
+# Django shell inside web
+docker compose exec web python manage.py check
+docker compose exec web python manage.py migrate
+docker compose exec web python manage.py seed_admin
+docker compose exec web python manage.py seed_sources
+docker compose exec web python manage.py test_openrouter_pipeline --no-save
+docker compose exec web python manage.py shell
+docker compose exec web bash              # interactive container shell
+
+# DB quick check (MySQL)
+docker compose exec db mysql -u threats -pthreats_pass threats -e "SHOW TABLES;"
+
+# Auth smoke test (JWT)
+curl -s -X POST http://localhost:8000/api/auth/token/ \
+  -H "Content-Type: application/json" \
+  -d '{"username":"nurADMIN","password":"<ADMIN_PASSWORD>"}'
+```

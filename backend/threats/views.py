@@ -2,14 +2,49 @@ from datetime import timedelta
 
 from django.db.models import Avg, Count, Q
 from django.utils import timezone
-from rest_framework import mixins, viewsets
-from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated
+from rest_framework import mixins, status, viewsets
+from rest_framework.exceptions import PermissionDenied
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .models import Alert, Metric, Source
-from .serializers import AlertSerializer, MetricSerializer, SourceSerializer
+from .serializers import (
+    AlertSerializer,
+    MetricSerializer,
+    RegisterSerializer,
+    SourceSerializer,
+)
+
+
+class RegisterView(APIView):
+    """
+    Public self-service registration.
+
+    Regular accounts are created directly. Admin (superuser) accounts require a
+    correct `admin_verification_password` matching `settings.AUTH_ADMIN_PWD`;
+    a mismatch returns 403 Forbidden.
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = RegisterSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        if serializer.validated_data.get("is_admin") and not serializer.admin_code_ok():
+            raise PermissionDenied("Invalid admin verification code.")
+
+        user = serializer.save()
+        return Response(
+            {
+                "id": user.id,
+                "username": user.username,
+                "email": user.email,
+                "is_admin": user.is_superuser,
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class SourceViewSet(viewsets.ModelViewSet):

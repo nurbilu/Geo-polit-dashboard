@@ -8,6 +8,21 @@ interface TokenPair {
   refresh: string;
 }
 
+export interface RegisterPayload {
+  username: string;
+  email: string;
+  password: string;
+  is_admin: boolean;
+  admin_verification_password?: string;
+}
+
+export interface RegisteredUser {
+  id: number;
+  username: string;
+  email: string;
+  is_admin: boolean;
+}
+
 const ACCESS_KEY = 'gpd_access';
 const REFRESH_KEY = 'gpd_refresh';
 const USER_KEY = 'gpd_user';
@@ -32,6 +47,13 @@ export class AuthService {
         tap((tokens) => this.persist(tokens, username)),
         map(() => void 0),
       );
+  }
+
+  register(payload: RegisterPayload): Observable<RegisteredUser> {
+    return this.http.post<RegisteredUser>(
+      `${this.base}/auth/register/`,
+      payload,
+    );
   }
 
   logout(): void {

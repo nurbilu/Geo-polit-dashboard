@@ -10,6 +10,7 @@ from .views import (
     AlertViewSet,
     DashboardSummaryView,
     MetricViewSet,
+    RegisterView,
     SourceViewSet,
 )
 
@@ -19,7 +20,8 @@ router.register(r"alerts", AlertViewSet, basename="alert")
 router.register(r"metrics", MetricViewSet, basename="metric")
 
 urlpatterns = [
-    # JWT auth endpoints.
+    # Auth endpoints.
+    path("auth/register/", RegisterView.as_view(), name="register"),
     path("auth/token/", TokenObtainPairView.as_view(), name="token_obtain_pair"),
     path("auth/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("auth/token/verify/", TokenVerifyView.as_view(), name="token_verify"),
